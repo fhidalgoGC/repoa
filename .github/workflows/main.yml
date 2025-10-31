@@ -15,15 +15,15 @@ permissions:
 
 jobs:
   notify:
-    if: github.ref_name != 'bk'
+    if: github.ref_name != 'bk' # ⛔ no ejecutar en main (ajusta si quieres)
     runs-on: ubuntu-latest
     env:
       TARGET_URL: ${{ secrets.WEBHOOK_URL }}
       MAX_ATTEMPTS: '3'
-      BACKOFF_SECONDS: '60'
+      BACKOFF_SECONDS: '60' # espera entre intentos
       FAIL_ON_ERROR: 'true'
     steps:
-      - name: Build payload and POST (validate HTTP + status + print full JSON)
+      - name: Build payload and POST (validate URL + HTTP + status + print full JSON)
         shell: bash
         run: |
           set -euo pipefail
@@ -43,21 +43,19 @@ jobs:
           # ID del usuario que hizo el push
           SENDER_ID="${{ github.event.sender.id }}"
 
-          # Obtener el ID/login del autor real del commit
-          AUTHOR_ID=""
-          AUTHOR_LOGIN=""
-          response=$(curl -sS \
+          # Autor del commit (si está asociado a cuenta GitHub)
+          resp=$(curl -sS \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${FULL_REPO}/commits/${SHA}" || true)
-          AUTHOR_ID=$(echo "$response" | jq -r '.author.id // empty')
-          AUTHOR_LOGIN=$(echo "$response" | jq -r '.author.login // empty')
+          AUTHOR_ID=$(echo "$resp" | jq -r '.author.id // empty')
+          AUTHOR_LOGIN=$(echo "$resp" | jq -r '.author.login // empty')
 
-          # Generar executionId
+          # executionId = <SENDER_ID>-<timestamp_ms>
           TIMESTAMP_MS=$(date +%s%3N)
           EXECUTION_ID="${SENDER_ID}-${TIMESTAMP_MS}"
 
-          # Construir payload
+          # Payload
           PAYLOAD="$(jq -n \
             --arg repo "$REPO" \
             --arg owner "$OWNER" \
@@ -94,7 +92,31 @@ jobs:
               senderId: $sender_id
             }'
           )"
-          echo "$PAYLOAD" > payload.json
+          echo "$PAYLOAD" | jq . > payload.json
+          echo "✅ payload.json bytes: $(wc -c < payload.json)"
+          echo "== PAYLOAD =="
+          jq . payload.json
+
+          # ===== Prechequeo de TARGET_URL =====
+          if [ -z "${TARGET_URL:-}" ]; then
+            echo "::error::TARGET_URL vacío. Revisa Settings > Secrets (WEBHOOK_URL) o push desde fork (sin secretos)."
+            exit 1
+          fi
+          TARGET_URL_TRIMMED="$(printf '%s' "$TARGET_URL" | tr -d '\r' | sed -e 's/^[[:space:]]\+//' -e 's/[[:space:]]\+$//')"
+          case "$TARGET_URL_TRIMMED" in
+            \"*\" ) TARGET_URL_TRIMMED="${TARGET_URL_TRIMMED%\"}"; TARGET_URL_TRIMMED="${TARGET_URL_TRIMMED#\"}";;
+            \'*\' ) TARGET_URL_TRIMMED="${TARGET_URL_TRIMMED%\'}"; TARGET_URL_TRIMMED="${TARGET_URL_TRIMMED#\'}";;
+          esac
+          if ! echo "$TARGET_URL_TRIMMED" | grep -Eqi '^https?://'; then
+            echo "::error::WEBHOOK_URL no parece http(s) válido: '$TARGET_URL_TRIMMED'"
+            exit 1
+          fi
+          TARGET_HOST="$(printf '%s' "$TARGET_URL_TRIMMED" | awk -F/ '{print $1"//"$3}')"
+          echo "✅ Host destino: $TARGET_HOST"
+          echo "🔎 URL (hex para detectar caracteres raros):"
+          printf '%s' "$TARGET_URL_TRIMMED" | od -An -tx1 | tr -s ' ' | sed 's/^ *//'
+          TARGET_URL="$TARGET_URL_TRIMMED"
+          # ====================================
 
           attempt=1
           ok=false
@@ -102,6 +124,10 @@ jobs:
           while [ "$attempt" -le "${MAX_ATTEMPTS}" ]; do
             echo ""
             echo "🚀 Intento $attempt/${MAX_ATTEMPTS} — enviando webhook..."
+            if [ "$attempt" -eq 1 ]; then
+              echo "➡️ curl -sS -o response.json -w \"%{http_code}\" -X POST \"$TARGET_URL\" -H 'Content-Type: application/json' --data-binary @payload.json"
+            fi
+
             HTTP_CODE=$(curl -sS -o response.json -w "%{http_code}" \
               -X POST "$TARGET_URL" \
               -H "Content-Type: application/json" \
@@ -109,12 +135,11 @@ jobs:
 
             echo "HTTP: $HTTP_CODE"
             if [ "$HTTP_CODE" != "200" ]; then
-              echo "::error::HTTP code != 200 (${HTTP_CODE}). Se considera fallo y se detiene."
+              echo "::error::HTTP code != 200 (${HTTP_CODE}). Se detiene."
               final_status="http-${HTTP_CODE}"
               break
             fi
 
-            # Leer status
             status_val=$(jq -r '.status // empty | ascii_downcase' response.json 2>/dev/null || echo "")
             final_status="$status_val"
             echo "📌 status='${status_val}'"
@@ -128,25 +153,21 @@ jobs:
               fi
             else
               echo ""
-              echo "📦 Respuesta completa del servidor (status distinto de in-process):"
+              echo "📦 Respuesta completa del servidor (status ≠ in-process):"
               jq . response.json || cat response.json
             fi
 
             if [ "$status_val" = "success" ]; then
               ok=true
-              echo "✅ Proceso finalizado con éxito (status=success)."
+              echo "✅ Proceso finalizado con éxito."
               break
-            elif [ "$status_val" = "fail" ] || [ "$status_val" = "failed" ] || [ "$status_val" = "error" ]; then
+            elif [ "$status_val" = "fail" ] || [ "$status_val" = "failed" ] || [ "$status_val" = "error" ] || [ -z "$status_val" ]; then
               ok=false
-              echo "::error::Proceso finalizó con error (status=${status_val})."
-              break
-            elif [ -z "$status_val" ]; then
-              echo "::warning::El campo 'status' no está presente en la respuesta."
-              ok=false
+              echo "::error::Proceso finalizó con estado '${status_val}'."
               break
             else
-              echo "::warning::Status no reconocido ('${status_val}'); se tratará como error."
               ok=false
+              echo "::warning::Status no reconocido ('${status_val}'); se tratará como error."
               break
             fi
           done
@@ -154,5 +175,5 @@ jobs:
           if [ "$ok" != "true" ]; then
             echo "❌ Webhook no terminó en success (resultado='${final_status}')."
             if [ "${FAIL_ON_ERROR}" = "true" ]; then exit 1; fi
-            echo "::warning::Continuando sin fallar el job (FAIL_ON_ERROR=false)."
+            echo "::warning::Continuando sin fallar el job."
           fi
