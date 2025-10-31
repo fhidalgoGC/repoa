@@ -3,24 +3,27 @@ name: Push Webhook (branch, commit, user)
 on:
   push:
     branches:
-      - '**'       # todas las ramas
+      - '**'
   workflow_dispatch:
 
 concurrency:
   group: push-webhook
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   notify:
-    if: github.ref_name != 'bk'  # ⛔ no ejecutar en main
+    if: github.ref_name != 'bk'
     runs-on: ubuntu-latest
     env:
       TARGET_URL: ${{ secrets.WEBHOOK_URL }}
       MAX_ATTEMPTS: '3'
-      BACKOFF_SECONDS: '2'
+      BACKOFF_SECONDS: '60'
       FAIL_ON_ERROR: 'true'
     steps:
-      - name: Build payload and POST (raw JSON, debug & HTTP status check)
+      - name: Build payload and POST (validate HTTP + status + print full JSON)
         shell: bash
         run: |
           set -euo pipefail
@@ -37,6 +40,24 @@ jobs:
           COMMIT_AUTHOR_EMAIL="${{ github.event.head_commit.author.email || '' }}"
           COMMIT_URL="https://github.com/${FULL_REPO}/commit/${SHA}"
 
+          # ID del usuario que hizo el push
+          SENDER_ID="${{ github.event.sender.id }}"
+
+          # Obtener el ID/login del autor real del commit
+          AUTHOR_ID=""
+          AUTHOR_LOGIN=""
+          response=$(curl -sS \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${FULL_REPO}/commits/${SHA}" || true)
+          AUTHOR_ID=$(echo "$response" | jq -r '.author.id // empty')
+          AUTHOR_LOGIN=$(echo "$response" | jq -r '.author.login // empty')
+
+          # Generar executionId
+          TIMESTAMP_MS=$(date +%s%3N)
+          EXECUTION_ID="${SENDER_ID}-${TIMESTAMP_MS}"
+
+          # Construir payload
           PAYLOAD="$(jq -n \
             --arg repo "$REPO" \
             --arg owner "$OWNER" \
@@ -49,6 +70,10 @@ jobs:
             --arg an "$COMMIT_AUTHOR_NAME" \
             --arg ae "$COMMIT_AUTHOR_EMAIL" \
             --arg actor "$ACTOR" \
+            --arg sender_id "$SENDER_ID" \
+            --arg author_id "$AUTHOR_ID" \
+            --arg author_login "$AUTHOR_LOGIN" \
+            --arg exec_id "$EXECUTION_ID" \
             '{
               repository: { name: $repo, owner: $owner, full_name: $full },
               ref: $ref,
@@ -57,45 +82,77 @@ jobs:
                 sha: $sha,
                 url: $url,
                 message: $msg,
-                author: { name: $an, email: $ae }
+                author: {
+                  name: $an,
+                  email: $ae,
+                  github_id: $author_id,
+                  githubLogin: $author_login
+                }
               },
-              actor: $actor
+              actor: $actor,
+              executionId: $exec_id,
+              senderId: $sender_id
             }'
           )"
-
-          echo "Repo: ${FULL_REPO} | Rama: ${BRANCH} | SHA: ${SHA}"
-          echo "== Payload =="
-          echo "$PAYLOAD" | jq .
           echo "$PAYLOAD" > payload.json
 
           attempt=1
           ok=false
+          final_status=""
           while [ "$attempt" -le "${MAX_ATTEMPTS}" ]; do
-            echo "== POST intento $attempt/${MAX_ATTEMPTS} =="
-            echo "curl -X POST \"$TARGET_URL\" -H 'Content-Type: application/json' --data-binary @payload.json"
-
+            echo ""
+            echo "🚀 Intento $attempt/${MAX_ATTEMPTS} — enviando webhook..."
             HTTP_CODE=$(curl -sS -o response.json -w "%{http_code}" \
               -X POST "$TARGET_URL" \
               -H "Content-Type: application/json" \
               --data-binary "@payload.json" || echo "000")
 
             echo "HTTP: $HTTP_CODE"
-            echo "Body:"
-            cat response.json || echo "(sin cuerpo)"
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "::error::HTTP code != 200 (${HTTP_CODE}). Se considera fallo y se detiene."
+              final_status="http-${HTTP_CODE}"
+              break
+            fi
 
-            if [[ "$HTTP_CODE" =~ ^2[0-9]{2}$ ]]; then
+            # Leer status
+            status_val=$(jq -r '.status // empty | ascii_downcase' response.json 2>/dev/null || echo "")
+            final_status="$status_val"
+            echo "📌 status='${status_val}'"
+
+            if [ "$status_val" = "in-process" ] || [ "$status_val" = "in_process" ]; then
+              attempt=$((attempt+1))
+              if [ "$attempt" -le "${MAX_ATTEMPTS}" ]; then
+                echo "⏳ Proceso en curso; esperando ${BACKOFF_SECONDS}s antes del siguiente intento..."
+                sleep "${BACKOFF_SECONDS}"
+                continue
+              fi
+            else
+              echo ""
+              echo "📦 Respuesta completa del servidor (status distinto de in-process):"
+              jq . response.json || cat response.json
+            fi
+
+            if [ "$status_val" = "success" ]; then
               ok=true
-              echo "✅ Webhook enviado correctamente."
+              echo "✅ Proceso finalizado con éxito (status=success)."
+              break
+            elif [ "$status_val" = "fail" ] || [ "$status_val" = "failed" ] || [ "$status_val" = "error" ]; then
+              ok=false
+              echo "::error::Proceso finalizó con error (status=${status_val})."
+              break
+            elif [ -z "$status_val" ]; then
+              echo "::warning::El campo 'status' no está presente en la respuesta."
+              ok=false
               break
             else
-              echo "::error::Webhook devolvió HTTP $HTTP_CODE en intento $attempt"
-              attempt=$((attempt+1))
-              sleep "${BACKOFF_SECONDS}"
+              echo "::warning::Status no reconocido ('${status_val}'); se tratará como error."
+              ok=false
+              break
             fi
           done
 
           if [ "$ok" != "true" ]; then
-            echo "❌ No se pudo enviar el webhook (HTTP $HTTP_CODE)."
+            echo "❌ Webhook no terminó en success (resultado='${final_status}')."
             if [ "${FAIL_ON_ERROR}" = "true" ]; then exit 1; fi
             echo "::warning::Continuando sin fallar el job (FAIL_ON_ERROR=false)."
           fi
