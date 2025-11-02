@@ -197,7 +197,9 @@ jobs:
 
             echo "HTTP: $HTTP_CODE"
             if [ "$HTTP_CODE" != "200" ]; then
-              echo "::warning::HTTP code != 200 (${HTTP_CODE}). Reintentando después de ${BACKOFF_SECONDS}s..."
+              echo "::warning::HTTP code != 200 (${HTTP_CODE}). Mostrando respuesta y reintentando después de ${BACKOFF_SECONDS}s..."
+              echo "📦 Cuerpo de respuesta (HTTP ${HTTP_CODE}):"
+              jq . response.json 2>/dev/null || cat response.json || echo "(sin contenido)"
               final_status="http-${HTTP_CODE}"
               attempt=$((attempt+1))
               if [ "$attempt" -le "${MAX_ATTEMPTS}" ]; then
@@ -220,11 +222,11 @@ jobs:
                 sleep "${BACKOFF_SECONDS}"
                 continue
               fi
-            } else {
+            else
               echo ""
               echo "📦 Respuesta completa del servidor (status ≠ in-process):"
               jq . response.json || cat response.json
-            }
+            fi
 
             if [ "$status_val" = "success" ]; then
               ok=true
