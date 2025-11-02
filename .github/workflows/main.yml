@@ -17,6 +17,7 @@ jobs:
   notify:
     if: github.ref_name != 'bk' # ⛔ no ejecutar en esta rama (ajusta si quieres)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       TARGET_URL: ${{ secrets.WEBHOOK_URL }}
       MAX_ATTEMPTS: '3'
@@ -36,8 +37,8 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 2️⃣ Construir payload, enviar a SQS y luego al endpoint
-      - name: Build payload, send to SQS, then POST to endpoint
+      # 2️⃣ Construir payload, imprimirlo, enviar a SQS y luego al endpoint
+      - name: Build payload, print JSON, send to SQS, then POST to endpoint
         shell: bash
         run: |
           set -euo pipefail
@@ -108,6 +109,12 @@ jobs:
           )"
           echo "$PAYLOAD" | jq . > payload.json
           echo "✅ payload.json bytes: $(wc -c < payload.json)"
+          
+          # 🧾 Mostrar el JSON que se va a enviar
+          echo ""
+          echo "📦 Payload que se enviará:"
+          jq . payload.json || cat payload.json
+          echo ""
 
           # =======================
           # 👉 ENVIAR A SQS PRIMERO
