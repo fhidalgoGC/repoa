@@ -197,9 +197,16 @@ jobs:
 
             echo "HTTP: $HTTP_CODE"
             if [ "$HTTP_CODE" != "200" ]; then
-              echo "::error::HTTP code != 200 (${HTTP_CODE}). Se detiene."
+              echo "::warning::HTTP code != 200 (${HTTP_CODE}). Reintentando después de ${BACKOFF_SECONDS}s..."
               final_status="http-${HTTP_CODE}"
-              break
+              attempt=$((attempt+1))
+              if [ "$attempt" -le "${MAX_ATTEMPTS}" ]; then
+                sleep "${BACKOFF_SECONDS}"
+                continue
+              else
+                echo "::error::Se alcanzó el número máximo de intentos (${MAX_ATTEMPTS}) con HTTP != 200."
+                break
+              fi
             fi
 
             status_val=$(jq -r '.status // empty | ascii_downcase' response.json 2>/dev/null || echo "")
@@ -213,11 +220,11 @@ jobs:
                 sleep "${BACKOFF_SECONDS}"
                 continue
               fi
-            else
+            } else {
               echo ""
               echo "📦 Respuesta completa del servidor (status ≠ in-process):"
               jq . response.json || cat response.json
-            fi
+            }
 
             if [ "$status_val" = "success" ]; then
               ok=true
