@@ -26,7 +26,7 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       SQS_QUEUE_URL: ${{ secrets.SQS_QUEUE_URL }}
       SQS_MESSAGE_GROUP: ${{ secrets.SQS_MESSAGE_GROUP }}
-      WAIT_SECONDS: '60'
+      WAIT_SECONDS: '90'
 
     steps:
       - name: Configure AWS credentials (static keys)
