@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   notify:
-    if: github.ref_name != 'bk' # ⛔ no ejecutar en esta rama (ajusta si quieres)
+    if: github.ref_name != 'bk'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -26,10 +26,9 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       SQS_QUEUE_URL: ${{ secrets.SQS_QUEUE_URL }}
       SQS_MESSAGE_GROUP: ${{ secrets.SQS_MESSAGE_GROUP }}
-      WAIT_SECONDS: '60' # ⏳ tiempo de espera después de enviar SQS (en segundos)
+      WAIT_SECONDS: '60'
 
     steps:
-      # 1️⃣ Configurar credenciales AWS
       - name: Configure AWS credentials (static keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -37,8 +36,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 2️⃣ Construir payload, imprimirlo, enviar a SQS y luego al endpoint
-      - name: Build payload, print JSON, send to SQS, then POST to endpoint
+      - name: Build payloads, print, send to SQS, then POST minimal payload to endpoint
         shell: bash
         run: |
           set -euo pipefail
@@ -55,10 +53,9 @@ jobs:
           COMMIT_AUTHOR_EMAIL="${{ github.event.head_commit.author.email || '' }}"
           COMMIT_URL="https://github.com/${FULL_REPO}/commit/${SHA}"
 
-          # ID del usuario que hizo el push
+          # IDs
           SENDER_ID="${{ github.event.sender.id }}"
 
-          # Autor del commit (si está asociado a cuenta GitHub)
           resp=$(curl -sS \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
@@ -70,7 +67,7 @@ jobs:
           TIMESTAMP_MS=$(date +%s%3N)
           EXECUTION_ID="${SENDER_ID}-${TIMESTAMP_MS}"
 
-          # Payload JSON
+          # ============ Payload COMPLETO (para SQS) ============
           PAYLOAD="$(jq -n \
             --arg repo "$REPO" \
             --arg owner "$OWNER" \
@@ -109,11 +106,22 @@ jobs:
           )"
           echo "$PAYLOAD" | jq . > payload.json
           echo "✅ payload.json bytes: $(wc -c < payload.json)"
-          
-          # 🧾 Mostrar el JSON que se va a enviar
+
           echo ""
-          echo "📦 Payload que se enviará:"
+          echo "📦 Payload para SQS (completo):"
           jq . payload.json || cat payload.json
+          echo ""
+
+          # ============ Payload MINIMAL (para ENDPOINT) ============
+          jq -n \
+            --arg exec_id "$EXECUTION_ID" \
+            --arg gid "$SENDER_ID" \
+            '{executionId:$exec_id, github_id:$gid}' > endpoint_payload.json
+
+          echo "✅ endpoint_payload.json bytes: $(wc -c < endpoint_payload.json)"
+          echo ""
+          echo "🎯 Payload para ENDPOINT (minimal):"
+          jq . endpoint_payload.json || cat endpoint_payload.json
           echo ""
 
           # =======================
@@ -157,7 +165,7 @@ jobs:
           echo "✅ Continuando con el envío al endpoint..."
 
           # =======================
-          # Luego llamar al ENDPOINT
+          # Luego llamar al ENDPOINT (con payload minimal)
           # =======================
           if [ -z "${TARGET_URL:-}" ]; then
             echo "::error::TARGET_URL vacío. Revisa Settings > Secrets (WEBHOOK_URL) o push desde fork (sin secretos)."
@@ -169,14 +177,10 @@ jobs:
             \"*\" ) TARGET_URL_TRIMMED="${TARGET_URL_TRIMMED%\"}"; TARGET_URL_TRIMMED="${TARGET_URL_TRIMMED#\"}";;
             \'*\' ) TARGET_URL_TRIMMED="${TARGET_URL_TRIMMED%\'}"; TARGET_URL_TRIMMED="${TARGET_URL_TRIMMED#\'}";;
           esac
-
           if ! echo "$TARGET_URL_TRIMMED" | grep -Eqi '^https?://'; then
             echo "::error::WEBHOOK_URL no parece http(s) válido: '$TARGET_URL_TRIMMED'"
             exit 1
           fi
-
-          TARGET_HOST="$(printf '%s' "$TARGET_URL_TRIMMED" | awk -F/ '{print $1"//"$3}')"
-          echo "✅ Host destino: $TARGET_HOST"
           TARGET_URL="$TARGET_URL_TRIMMED"
 
           attempt=1
@@ -189,7 +193,7 @@ jobs:
             HTTP_CODE=$(curl -sS -o response.json -w "%{http_code}" \
               -X POST "$TARGET_URL" \
               -H "Content-Type: application/json" \
-              --data-binary "@payload.json" || echo "000")
+              --data-binary "@endpoint_payload.json" || echo "000")
 
             echo "HTTP: $HTTP_CODE"
             if [ "$HTTP_CODE" != "200" ]; then
