@@ -5,10 +5,10 @@ on:
     branches:
       - '**'
   workflow_dispatch:
-
+  
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -56,14 +56,59 @@ jobs:
           # IDs
           SENDER_ID="${{ github.event.sender.id }}"
 
+          # Obtener info del commit desde GitHub API
           resp=$(curl -sS \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${FULL_REPO}/commits/${SHA}" || true)
+
           AUTHOR_ID=$(echo "$resp" | jq -r '.author.id // empty')
           AUTHOR_LOGIN=$(echo "$resp" | jq -r '.author.login // empty')
 
-          # executionId = <SENDER_ID>-<timestamp_ms>
+          # ───────────────────────────────────────────────────────────────
+          # 🔍 Fallbacks para commit message, autor y github_id
+          # ───────────────────────────────────────────────────────────────
+          if [ -z "$COMMIT_MSG" ] || [ "$COMMIT_MSG" = "null" ]; then
+            echo "⚠️ Commit message vacío, obteniendo desde API..."
+            COMMIT_MSG=$(echo "$resp" | jq -r '.commit.message // empty' || echo "")
+          fi
+          if [ -z "$COMMIT_AUTHOR_NAME" ] || [ "$COMMIT_AUTHOR_NAME" = "null" ]; then
+            COMMIT_AUTHOR_NAME=$(echo "$resp" | jq -r '.commit.author.name // empty' || echo "")
+          fi
+          if [ -z "$COMMIT_AUTHOR_EMAIL" ] || [ "$COMMIT_AUTHOR_EMAIL" = "null" ]; then
+            COMMIT_AUTHOR_EMAIL=$(echo "$resp" | jq -r '.commit.author.email // empty' || echo "")
+          fi
+          if [ -z "$AUTHOR_ID" ] || [ "$AUTHOR_ID" = "null" ]; then
+            AUTHOR_ID=$(echo "$resp" | jq -r '.commit.committer.id // empty' || echo "")
+          fi
+          if [ -z "$AUTHOR_LOGIN" ] || [ "$AUTHOR_LOGIN" = "null" ]; then
+            AUTHOR_LOGIN=$(echo "$resp" | jq -r '.commit.committer.login // empty' || echo "")
+          fi
+
+          # Si aún falta autor, usa committer
+          if [ -z "$COMMIT_AUTHOR_NAME" ] || [ -z "$COMMIT_AUTHOR_EMAIL" ]; then
+            NAME_ALT=$(echo "$resp" | jq -r '.commit.committer.name // empty' || echo "")
+            EMAIL_ALT=$(echo "$resp" | jq -r '.commit.committer.email // empty' || echo "")
+            if [ -z "$COMMIT_AUTHOR_NAME" ] || [ "$COMMIT_AUTHOR_NAME" = "null" ]; then
+              COMMIT_AUTHOR_NAME="$NAME_ALT"
+            fi
+            if [ -z "$COMMIT_AUTHOR_EMAIL" ] || [ "$COMMIT_AUTHOR_EMAIL" = "null" ]; then
+              COMMIT_AUTHOR_EMAIL="$EMAIL_ALT"
+            fi
+          fi
+
+          # Defaults finales
+          COMMIT_MSG="${COMMIT_MSG:-(sin mensaje de commit)}"
+          COMMIT_AUTHOR_NAME="${COMMIT_AUTHOR_NAME:-(autor desconocido)}"
+          COMMIT_AUTHOR_EMAIL="${COMMIT_AUTHOR_EMAIL:-(correo desconocido)}"
+          AUTHOR_ID="${AUTHOR_ID:-0}"
+          AUTHOR_LOGIN="${AUTHOR_LOGIN:-(usuario desconocido)}"
+
+          echo "📝 Commit message: $COMMIT_MSG"
+          echo "👤 Autor: $COMMIT_AUTHOR_NAME <$COMMIT_AUTHOR_EMAIL>"
+          echo "🆔 GitHub ID: $AUTHOR_ID ($AUTHOR_LOGIN)"
+
+          # Identificador de ejecución
           TIMESTAMP_MS=$(date +%s%3N)
           EXECUTION_ID="${SENDER_ID}-${TIMESTAMP_MS}"
 
@@ -165,10 +210,10 @@ jobs:
           echo "✅ Continuando con el envío al endpoint..."
 
           # =======================
-          # Luego llamar al ENDPOINT (con payload minimal)
+          # Llamar al ENDPOINT (con payload minimal)
           # =======================
           if [ -z "${TARGET_URL:-}" ]; then
-            echo "::error::TARGET_URL vacío. Revisa Settings > Secrets (WEBHOOK_URL) o push desde fork (sin secretos)."
+            echo "::error::TARGET_URL vacío. Revisa Settings > Secrets (WEBHOOK_URL)."
             exit 1
           fi
 
@@ -194,7 +239,7 @@ jobs:
               -X POST "$TARGET_URL" \
               -H "Content-Type: application/json" \
               --data-binary "@endpoint_payload.json" || echo "000")
-          
+
             echo "HTTP: $HTTP_CODE"
             if [ "$HTTP_CODE" != "200" ]; then
               echo "::error::HTTP code != 200 (${HTTP_CODE}). Se detiene aquí."
@@ -203,22 +248,22 @@ jobs:
               final_status="http-${HTTP_CODE}"
               break
             fi
-          
+
             status_val=$(jq -r '.status // empty | ascii_downcase' response.json 2>/dev/null || echo "")
             final_status="$status_val"
             echo "📌 status='${status_val}'"
-          
+
             if [ "$status_val" = "in-process" ] || [ "$status_val" = "in_process" ]; then
               echo "⏳ Proceso en curso; esperando ${BACKOFF_SECONDS}s antes del siguiente intento..."
               attempt=$((attempt+1))
               sleep "${BACKOFF_SECONDS}"
               continue
             fi
-          
+
             echo ""
             echo "📦 Respuesta completa del servidor (status ≠ in-process):"
             jq . response.json || cat response.json
-          
+
             if [ "$status_val" = "success" ]; then
               ok=true
               echo "✅ Proceso finalizado con éxito."
@@ -233,7 +278,6 @@ jobs:
               break
             fi
           done
-
 
           if [ "$ok" != "true" ]; then
             echo "❌ Webhook no terminó en success (resultado='${final_status}')."
