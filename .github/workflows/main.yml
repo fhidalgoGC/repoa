@@ -194,54 +194,46 @@ jobs:
               -X POST "$TARGET_URL" \
               -H "Content-Type: application/json" \
               --data-binary "@endpoint_payload.json" || echo "000")
-
+          
             echo "HTTP: $HTTP_CODE"
             if [ "$HTTP_CODE" != "200" ]; then
-              echo "::warning::HTTP code != 200 (${HTTP_CODE}). Mostrando respuesta y reintentando después de ${BACKOFF_SECONDS}s..."
+              echo "::error::HTTP code != 200 (${HTTP_CODE}). Se detiene aquí."
               echo "📦 Cuerpo de respuesta (HTTP ${HTTP_CODE}):"
               jq . response.json 2>/dev/null || cat response.json || echo "(sin contenido)"
               final_status="http-${HTTP_CODE}"
-              attempt=$((attempt+1))
-              if [ "$attempt" -le "${MAX_ATTEMPTS}" ]; then
-                sleep "${BACKOFF_SECONDS}"
-                continue
-              else
-                echo "::error::Se alcanzó el número máximo de intentos (${MAX_ATTEMPTS}) con HTTP != 200."
-                break
-              fi
+              break
             fi
-
+          
             status_val=$(jq -r '.status // empty | ascii_downcase' response.json 2>/dev/null || echo "")
             final_status="$status_val"
             echo "📌 status='${status_val}'"
-
+          
             if [ "$status_val" = "in-process" ] || [ "$status_val" = "in_process" ]; then
+              echo "⏳ Proceso en curso; esperando ${BACKOFF_SECONDS}s antes del siguiente intento..."
               attempt=$((attempt+1))
-              if [ "$attempt" -le "${MAX_ATTEMPTS}" ]; then
-                echo "⏳ Proceso en curso; esperando ${BACKOFF_SECONDS}s antes del siguiente intento..."
-                sleep "${BACKOFF_SECONDS}"
-                continue
-              fi
-            else
-              echo ""
-              echo "📦 Respuesta completa del servidor (status ≠ in-process):"
-              jq . response.json || cat response.json
+              sleep "${BACKOFF_SECONDS}"
+              continue
             fi
-
+          
+            echo ""
+            echo "📦 Respuesta completa del servidor (status ≠ in-process):"
+            jq . response.json || cat response.json
+          
             if [ "$status_val" = "success" ]; then
               ok=true
               echo "✅ Proceso finalizado con éxito."
               break
-            elif [ "$status_val" = "fail" ] || [ "$status_val" = "failed" ] || [ "$status_val" = "error" ] || [ -z "$status_val" ]; then
+            elif [ "$status_val" = "fail" ] || [ "$status_val" = "failed" ] || [ "$status_val" = "error" ]; then
               ok=false
               echo "::error::Proceso finalizó con estado '${status_val}'."
               break
             else
               ok=false
-              echo "::warning::Status no reconocido ('${status_val}'); se tratará como error."
+              echo "::warning::Status no reconocido ('${status_val}'); se detiene."
               break
             fi
           done
+
 
           if [ "$ok" != "true" ]; then
             echo "❌ Webhook no terminó en success (resultado='${final_status}')."
