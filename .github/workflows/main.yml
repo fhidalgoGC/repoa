@@ -62,7 +62,7 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${FULL_REPO}/commits/${SHA}" || true)
 
-          AUTHOR_ID=$(echo "$resp" | jq -r '.author.id // empty')
+          AUTHOR_ID=$(echo "$resp" | jq -r '.author.id // .committer.id // empty')
           AUTHOR_LOGIN=$(echo "$resp" | jq -r '.author.login // empty')
 
           # ───────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ jobs:
             COMMIT_AUTHOR_EMAIL=$(echo "$resp" | jq -r '.commit.author.email // empty' || echo "")
           fi
           if [ -z "$AUTHOR_ID" ] || [ "$AUTHOR_ID" = "null" ]; then
-            AUTHOR_ID=$(echo "$resp" | jq -r '.commit.committer.id // empty' || echo "")
+            AUTHOR_ID="$SENDER_ID"
           fi
           if [ -z "$AUTHOR_LOGIN" ] || [ "$AUTHOR_LOGIN" = "null" ]; then
             AUTHOR_LOGIN=$(echo "$resp" | jq -r '.commit.committer.login // empty' || echo "")
