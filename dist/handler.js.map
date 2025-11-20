@@ -4,4 +4,22 @@
   "sourcesContent": ["import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';\nimport { execSync } from 'child_process';\nimport { existsSync } from 'fs';\nimport { join } from 'path';\n\n/**\n * Main Lambda handler function\n * Processes GitHub webhooks and syncs repository changes to GitLab\n */\nexport const main = async (\n  event: APIGatewayProxyEvent\n): Promise<APIGatewayProxyResult> => {\n  console.log(\"\uD83D\uDE80 Lambda funcionando con contenedor!\");\n  console.log(\"Evento recibido:\", JSON.stringify(event, null, 2));\n  \n  try {\n    // Ruta del script en el contenedor\n    const scriptPath = '/var/task/scripts/sync-repo.sh';\n    \n    // Verificar que el script existe\n    if (!existsSync(scriptPath)) {\n      throw new Error(`Script no encontrado en: ${scriptPath}`);\n    }\n    \n    console.log(\"\uD83D\uDCDC Ejecutando script de sincronizaci\u00F3n...\");\n    \n    // Ejecutar el script\n    const scriptOutput = execSync(scriptPath, { \n      encoding: 'utf8',\n      timeout: 30000, // 30 segundos timeout\n      cwd: '/var/task'\n    });\n    \n    console.log(\"\uD83D\uDCCB Salida del script:\");\n    console.log(scriptOutput);\n    \n    return {\n      statusCode: 200,\n      body: JSON.stringify({ \n        message: \"Script ejecutado exitosamente desde la Lambda\",\n        timestamp: new Date().toISOString(),\n        scriptOutput: scriptOutput\n      })\n    };\n    \n  } catch (error) {\n    console.error(\"\u274C Error ejecutando script:\", error);\n    \n    return {\n      statusCode: 500,\n      body: JSON.stringify({ \n        message: \"Error ejecutando script\",\n        error: error instanceof Error ? error.message : String(error),\n        timestamp: new Date().toISOString()\n      })\n    };\n  }\n};\n\n// Export para Lambda (CommonJS compatible)\nexport { main as handler };\n"],
   "mappings": "yaAAA,IAAAA,EAAA,GAAAC,EAAAD,EAAA,aAAAE,EAAA,SAAAA,IAAA,eAAAC,EAAAH,GACA,IAAAI,EAAyB,yBACzBC,EAA2B,cAOdH,EAAO,MAClBI,GACmC,CACnC,QAAQ,IAAI,8CAAuC,EACnD,QAAQ,IAAI,mBAAoB,KAAK,UAAUA,EAAO,KAAM,CAAC,CAAC,EAE9D,GAAI,CAEF,IAAMC,EAAa,iCAGnB,GAAI,IAAC,cAAWA,CAAU,EACxB,MAAM,IAAI,MAAM,4BAA4BA,CAAU,EAAE,EAG1D,QAAQ,IAAI,qDAA2C,EAGvD,IAAMC,KAAe,YAASD,EAAY,CACxC,SAAU,OACV,QAAS,IACT,IAAK,WACP,CAAC,EAED,eAAQ,IAAI,8BAAuB,EACnC,QAAQ,IAAIC,CAAY,EAEjB,CACL,WAAY,IACZ,KAAM,KAAK,UAAU,CACnB,QAAS,gDACT,UAAW,IAAI,KAAK,EAAE,YAAY,EAClC,aAAcA,CAChB,CAAC,CACH,CAEF,OAASC,EAAO,CACd,eAAQ,MAAM,kCAA8BA,CAAK,EAE1C,CACL,WAAY,IACZ,KAAM,KAAK,UAAU,CACnB,QAAS,0BACT,MAAOA,aAAiB,MAAQA,EAAM,QAAU,OAAOA,CAAK,EAC5D,UAAW,IAAI,KAAK,EAAE,YAAY,CACpC,CAAC,CACH,CACF,CACF",
   "names": ["handler_exports", "__export", "main", "__toCommonJS", "import_child_process", "import_fs", "event", "scriptPath", "scriptOutput", "error"]
+  "text":"-3815 S Hamilton Rd, Groveport, OH 43125 - nombre Workforce Enterprises
+-3892 E Broad St, Whitehall, OH 43213 nombre del Staffing Alternatives
+-355 E Campus View Blvd #145, Columbus, OH 43235 nombre del staffing Employment Solutions
+-4495 E Broad St, Columbus, OH 43213 nombre del staffin Reliable Staffing Resources( este tiene muchas franquicias y en todas aceptan ) 
+-4701 Hilton Corporate Dr, Columbus, OH 43232 nombre del staffing Solutions Staffing - Southeast Columbus
+-5953 E Main St, Columbus, OH 43232 nombre del staffing Abacus Corporation
+-4762 W Broad St, Columbus, OH 43228 -nombre del staffing 
+Labor Source Columbus West 
+-6097 McNaughten Ctr, Columbus, OH 43232 nombre del staffing Snider-Blake Personnel
+  https://www.rsrtemps.com/
+  https://maps.app.goo.gl/euXnk8JMMdG3CjBz7?g_st=com.google.maps.preview.copy
+  https://maps.app.goo.gl/4PYJpHbkdnjxgdHt6?g_st=iw
+https://maps.app.goo.gl/4PYJpHbkdnjxgdHt6?g_st=iw
+https://maps.app.goo.gl/JqxwwiV3joufWdUQA?g_st=com.google.maps.preview.copy
+https://maps.app.goo.gl/5um2oD6NgazKCLj3A?g_st=com.google.maps.preview.copy
+The Job Center Staffing
+(614) 333-9675 https://g.co/kgs/MgzFccZ"
 }
+
